@@ -1,4 +1,4 @@
-import streamlit as st
+from flask import Flask, request, jsonify
 import os
 import chromadb
 from langchain_community.document_loaders import PyPDFLoader
@@ -11,20 +11,20 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
 
-# Load environment variables
+
 load_dotenv()
 os.environ["CHROMA_DB_DIR"] = "./chroma_db"
 
 
-st.title("Rapids AI Chat-Bot")
+app = Flask(__name__)
 
-# Load and prepare the PDF document
+
 loader = PyPDFLoader("Rapids_AI_Text_Data.pdf")
 data = loader.load()
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000)
 docs = text_splitter.split_documents(data)
 
-# Create the vector store
+
 vectorstore = Chroma.from_documents(
     documents=docs, 
     embedding=GoogleGenerativeAIEmbeddings(model="models/embedding-001"),
@@ -32,10 +32,10 @@ vectorstore = Chroma.from_documents(
 )
 retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 10})
 
-# Set up the chatbot model
+
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0, max_tokens=None, timeout=None)
 
-# Set up system prompt
+
 system_prompt = (
     "You are an assistant for question-answering tasks. "
     "Use the following pieces of retrieved context to answer "
@@ -51,36 +51,31 @@ prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-
-if st.button("Clear Chat History"):
-    st.session_state.chat_history = []
-
-# Chat input from user
-query = st.chat_input("Ask Me Anything: ") 
-
-if query:
+# Endpoint for the chatbot
+@app.route('/chatbot', methods=['POST'])
+def chatbot():
     
-    st.session_state.chat_history.append(("User", query))
+    data = request.get_json()
+    query = data.get("input")
     
+    
+    if not query:
+        return jsonify({"error": "No input provided"}), 400
+
     
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
     rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+    
+    
     response = rag_chain.invoke({"input": query})
+    answer = response.get("answer", "Sorry, I couldn’t find an answer to your question.").strip()
     
     
-    answer = response["answer"]
-    st.session_state.chat_history.append(("Bot", answer))
-    
-   
     chromadb.api.client.SharedSystemClient.clear_system_cache()
+    
+    # Return response as JSON
+    return jsonify({"response": answer})
 
-# Display chat history with icons
-for sender, message in st.session_state.chat_history:
-    if sender == "User":
-        st.markdown(f"👤 **You:** {message}")
-    else:
-        st.markdown(f"🤖 **Bot:** {message}")
+
+if __name__ == '__main__':
+    app.run(debug=True)
